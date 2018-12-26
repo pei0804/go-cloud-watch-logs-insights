@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +12,53 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 )
+
+var (
+	startTimeStr = flag.String("s", "2018-12-25", "start time")
+	endTimeStr   = flag.String("e", "2018-12-26", "end time")
+	logGroupName = flag.String("n", "/aws/lambda/lambda-error-notify", "log group name")
+	limit        = flag.Int("l", 10, "limit")
+	query        = flag.String("q", "fields @timestamp, @message | sort @timestamp desc", "query")
+)
+
+const DateLayout = "2006-01-02"
+
+func main() {
+	flag.Parse()
+	startTime, err := time.Parse(DateLayout, *startTimeStr)
+	if err != nil {
+		panic(err)
+	}
+	endTime, err := time.Parse(DateLayout, *endTimeStr)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("start time = %s\n", startTime)
+	fmt.Printf("end time = %s\n", endTime)
+	fmt.Printf("limit = %d\n", *limit)
+	fmt.Printf("log group name = %s\n", *logGroupName)
+	fmt.Printf("query = %s\n", *query)
+
+	cwl := NewAwsCloudWatchClient()
+	inputStartQuery, err := NewStartQueryInput(startTime.Unix(), endTime.Unix(), int64(*limit), *logGroupName, *query)
+	if err != nil {
+		panic(err)
+	}
+	startQueryOutput, err := cwl.StartQuery(inputStartQuery)
+	if err != nil {
+		panic(err)
+	}
+	resultsOutput, err := getQueryResultsUntilCompleate(cwl, *startQueryOutput.QueryId, *limit)
+	if err != nil {
+		panic(err)
+	}
+	for _, rs := range resultsOutput.Results {
+		for _, v := range rs {
+			fmt.Printf("field=%s, value=%s", *v.Field, *v.Value)
+		}
+	}
+}
 
 func NewAwsCloudWatchClient() *cloudwatchlogs.CloudWatchLogs {
 	sess := session.Must(session.NewSession())
@@ -33,38 +82,9 @@ func NewStartQueryInput(startTime int64, endTime int64, limit int64, logGroupNam
 	return i, nil
 }
 
-func main() {
-	now := time.Now()
-	startTime := now.Unix()
-	endTime := now.Add(-5 * time.Minute).Unix()
-	limit := 10
-	logGroupName := "/aws/lambda/hoge"
-	query := "fields @timestamp, @message | sort @timestamp desc"
-
-	cwl := NewAwsCloudWatchClient()
-	inputStartQuery, err := NewStartQueryInput(startTime, endTime, int64(limit), logGroupName, query)
-	if err != nil {
-		panic(err)
-	}
-	startQueryOutput, err := cwl.StartQuery(inputStartQuery)
-	if err != nil {
-		panic(err)
-	}
-	resultsOutput, err := getQueryResultsUntilCompleate(cwl, *startQueryOutput.QueryId, limit)
-	if err != nil {
-		panic(err)
-	}
-	for _, rs := range resultsOutput.Results {
-		for _, v := range rs {
-			fmt.Printf("field=%s, value=%s", *v.Field, *v.Value)
-		}
-	}
-}
-
 func getQueryResultsUntilCompleate(cwl *cloudwatchlogs.CloudWatchLogs, queryId string, limit int) (*cloudwatchlogs.GetQueryResultsOutput, error) {
 	getQueryResultInput := &cloudwatchlogs.GetQueryResultsInput{}
 	getQueryResultInput.SetQueryId(queryId)
-	fmt.Println(queryId)
 	for {
 		getQueryResultOutput, err := cwl.GetQueryResults(getQueryResultInput)
 		if err != nil {
@@ -72,25 +92,27 @@ func getQueryResultsUntilCompleate(cwl *cloudwatchlogs.CloudWatchLogs, queryId s
 		}
 		time.Sleep(5 * time.Second)
 		switch *getQueryResultOutput.Status {
-		case "Running", "Scheduled":
+		case "Running":
 			if len(getQueryResultOutput.Results) < limit {
 				continue
 			}
-			// FIXME クエリ止めたいが止めれない
-			// fmt.Println(queryId)
-			// stopQueryInput := &cloudwatchlogs.StopQueryInput{}
-			// stopQueryInput.SetQueryId(queryId)
-			// stopResult, err := cwl.StopQuery(stopQueryInput)
-			// if err != nil {
-			// 	return nil, fmt.Errorf("あかんなんか死んだわ: error=%s status=%v", err.Error(), stopResult)
-			// }
+			stopQueryInput := &cloudwatchlogs.StopQueryInput{}
+			stopQueryInput.SetQueryId(queryId)
+			stopResult, err := cwl.StopQuery(stopQueryInput)
+			if err != nil {
+				return nil, fmt.Errorf("stop query error=%s status=%v", err.Error(), stopResult)
+			}
 			return getQueryResultOutput, nil
-		case "Failed", "Cancelled":
-			return nil, fmt.Errorf("あかんなんか死んだわ: %s", getQueryResultOutput.String())
+		case "Scheduled":
+			continue
+		case "Failed":
+			return nil, errors.New("job failed")
+		case "Cancelled":
+			return nil, errors.New("job cancelled")
 		case "Complete":
 			return getQueryResultOutput, nil
 		default:
-			return nil, fmt.Errorf("あかんなんか死んだわ: %s", getQueryResultOutput.String())
+			return nil, fmt.Errorf("unknown status: %s", *getQueryResultOutput.Status)
 		}
 	}
 }
