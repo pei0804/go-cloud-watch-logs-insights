@@ -16,7 +16,7 @@ import (
 var (
 	startTimeStr = flag.String("s", "2018-12-25", "start time")
 	endTimeStr   = flag.String("e", "2018-12-26", "end time")
-	logGroupName = flag.String("n", "/aws/lambda/lambda-error-notify", "log group name")
+	logGroupName = flag.String("n", "/aws/lambda/hoge", "log group name")
 	limit        = flag.Int("l", 10, "limit")
 	query        = flag.String("q", "fields @timestamp, @message | sort @timestamp desc", "query")
 )
