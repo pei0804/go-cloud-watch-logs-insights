@@ -55,7 +55,7 @@ func main() {
 	}
 	for _, rs := range resultsOutput.Results {
 		for _, v := range rs {
-			fmt.Printf("field=%s, value=%s", *v.Field, *v.Value)
+			fmt.Printf("field=%s, value=%s\n", *v.Field, *v.Value)
 		}
 	}
 }

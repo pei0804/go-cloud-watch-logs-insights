@@ -8,3 +8,6 @@ download:
 
 vendor:
 	go mod vendor
+
+run:
+	go run main.go
